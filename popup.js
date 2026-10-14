@@ -5,35 +5,42 @@ document.addEventListener("DOMContentLoaded", () => {
 
   const outSelect = document.getElementById("out-select");
   const outFrom = document.getElementById("out-from");
-  const outFilter = document.getElementById("out-filter");
-  const outOther = document.getElementById("out-other");
 
+  // Load saved SQL query when popup opens
+  chrome.storage.local.get(["savedSql"], (result) => {
+    if (result.savedSql) {
+      inputEl.value = result.savedSql;
+    }
+  });
+
+  // Save SQL query automatically as you type/paste
+  inputEl.addEventListener("input", () => {
+    chrome.storage.local.set({ savedSql: inputEl.value });
+  });
+
+  // Split Button Logic
   splitBtn.addEventListener("click", () => {
     const rawSql = inputEl.value.trim();
     if (!rawSql) return;
 
+    // 1. Break ALL queries (including CTE subqueries) into main blocks
     const parsed = parseTopLevelSQL(rawSql);
 
-    outSelect.value = parsed.select || "(None)";
-    outFrom.value = parsed.from || "(None)";
+    // 2. Format SELECT blocks individually, then join them with spacing
+    if (parsed.selectArray && parsed.selectArray.length > 0) {
+      const formattedSelects = parsed.selectArray.map(block => formatClause(block, "SELECT"));
+      outSelect.value = formattedSelects.join("\n\n------ Next Query / Subquery ------\n\n");
+    } else {
+      outSelect.value = "(None)";
+    }
     
-    // Group WHERE and HAVING clauses under FILTER
-    const filters = [];
-    if (parsed.where) filters.push(`WHERE ${parsed.where}`);
-    if (parsed.having) filters.push(`HAVING ${parsed.having}`);
-    outFilter.value = filters.join("\n\n") || "(None)";
-
-    // Group other supplementary clauses
-    const others = [];
-    if (parsed.groupBy) others.push(`GROUP BY ${parsed.groupBy}`);
-    if (parsed.orderBy) others.push(`ORDER BY ${parsed.orderBy}`);
-    if (parsed.limit) others.push(`LIMIT ${parsed.limit}`);
-    outOther.value = others.join("\n") || "(None)";
+    // 3. Extract BASE TABLES in "CODE - TABLENAME" format (Unique across all queries)
+    outFrom.value = extractBaseTables(rawSql) || "(None)";
 
     resultsDiv.style.display = "block";
   });
 
-  // Copy to clipboard helper
+  // Copy button logic
   document.querySelectorAll(".copy-btn").forEach((btn) => {
     btn.addEventListener("click", (e) => {
       const targetId = e.target.getAttribute("data-target");
@@ -49,103 +56,205 @@ document.addEventListener("DOMContentLoaded", () => {
 });
 
 /**
- * Parses top-level clauses by tracking quotes and parenthesis depth.
+ * Extracts physical tables and aliases uniquely across ALL queries in the text.
+ */
+function extractBaseTables(sql) {
+  // Clean comments and OBIEE brackets
+  let s = sql.replace(/--.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "");
+  s = s.replace(/\[\[|\]\]/g, " "); 
+  s = s.replace(/'(?:[^'\\]|\\.)*'/g, "''"); 
+  
+  const extractedPairs = new Map();
+  const regex = /("[^"]+"|`[^`]+`|\[[^\]]+\]|[a-zA-Z0-9_\$#.]+|,|\(\vert{}\)|FROM|JOIN|INNER|LEFT|RIGHT|FULL|OUTER|CROSS|WHERE|GROUP|HAVING|ORDER|LIMIT|SELECT|AS|ON|USING|UNION|ALL|INTERSECT|MINUS)/gi;
+  const tokens = s.match(regex);
+  
+  if (!tokens) return "";
+  
+  let expectingTable = false;
+  let i = 0;
+  
+  while(i < tokens.length) {
+    const tok = tokens[i].toUpperCase();
+    
+    if (tok === 'FROM' || tok === 'JOIN') {
+      expectingTable = true;
+      i++;
+      continue;
+    }
+    
+    if (expectingTable) {
+      if (tok === '(') {
+        expectingTable = false;
+        i++;
+        continue;
+      }
+      
+      const stopWords = ['WHERE','GROUP','HAVING','ORDER','LIMIT','SELECT','ON','USING','LEFT','RIGHT','INNER','FULL','OUTER','CROSS','JOIN','UNION','ALL','INTERSECT','MINUS'];
+      if (stopWords.includes(tok)) {
+        expectingTable = false;
+        continue;
+      }
+      
+      let tableName = tokens[i];
+      let alias = "";
+      
+      if (i + 1 < tokens.length) {
+        const nextTok = tokens[i+1].toUpperCase();
+        if (nextTok === 'AS') {
+          if (i + 2 < tokens.length) {
+            alias = tokens[i+2];
+            i += 2;
+          }
+        } else if (!stopWords.includes(nextTok) && nextTok !== ',' && nextTok !== '(' && nextTok !== ')') {
+          alias = tokens[i+1];
+          i++;
+        }
+      }
+      
+      const uniqueKey = `${tableName}||${alias}`;
+      if (!extractedPairs.has(uniqueKey)) {
+        extractedPairs.set(uniqueKey, { table: tableName, code: alias || "" });
+      }
+      
+      if (i + 1 < tokens.length && tokens[i+1] === ',') {
+        expectingTable = true;
+        i++;
+      } else {
+        expectingTable = false;
+      }
+    }
+    i++;
+  }
+  
+  const lines = [];
+  extractedPairs.forEach((val) => {
+    if (val.code) {
+      lines.push(`${val.code} - ${val.table}`);
+    } else {
+      lines.push(val.table);
+    }
+  });
+  
+  return lines.join("\n");
+}
+
+/**
+ * Formats a specific clause by inserting line breaks safely 
+ */
+function formatClause(text, type) {
+  if (!text || text === "(None)") return text;
+
+  let result = "";
+  let parenDepth = 0;
+  let inString = false;
+  let stringChar = "";
+
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
+
+    if ((char === "'" || char === '"') && text[i - 1] !== "\\") {
+      if (!inString) { inString = true; stringChar = char; }
+      else if (stringChar === char) { inString = false; }
+    }
+
+    if (!inString) {
+      if (char === "(") parenDepth++;
+      if (char === ")") parenDepth = Math.max(0, parenDepth - 1);
+    }
+
+    if (parenDepth === 0 && !inString) {
+      if (type === "SELECT" && char === ",") {
+        result += ",\n";
+        let nextIdx = i + 1;
+        while (nextIdx < text.length && /\s/.test(text[nextIdx])) nextIdx++;
+        i = nextIdx - 1;
+        continue;
+      }
+    }
+    result += char;
+  }
+
+  return result
+    .split('\n')
+    .map(line => line.trim())
+    .filter(line => line.length > 0)
+    .join('\n');
+}
+
+/**
+ * Intelligently extracts SELECT clauses by finding SELECT and stopping at the matching FROM.
  */
 function parseTopLevelSQL(sql) {
-  // Strip trailing semicolons and comments
-  const cleanSql = sql
-    .replace(/--.*\$/gm, "")
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/;+\s*\$/, "")
-    .trim();
-
-  const majorKeywords = [
-    "SELECT",
-    "FROM",
-    "WHERE",
-    "GROUP BY",
-    "HAVING",
-    "ORDER BY",
-    "LIMIT"
-  ];
-
+  const cleanSql = sql.replace(/--.*\$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "").replace(/\[\[\vert{}\]\]/g, " ").trim();
+  
   let parenDepth = 0;
   let inString = false;
   let stringChar = "";
   
-  // Find top-level keyword boundary positions
-  const boundaries = [];
-  const len = cleanSql.length;
+  const selectBlocks = [];
+  let currentSelect = null;
+  
+  const isWordChar = (c) => /[a-zA-Z0-9_\$]/.test(c);
 
-  for (let i = 0; i < len; i++) {
+  for (let i = 0; i < cleanSql.length; i++) {
     const char = cleanSql[i];
-
-    // String literal boundary check ('...' or "...")
+    
+    // Ignore keywords inside strings
     if ((char === "'" || char === '"') && cleanSql[i - 1] !== "\\") {
-      if (!inString) {
-        inString = true;
-        stringChar = char;
-      } else if (stringChar === char) {
-        inString = false;
-      }
+      if (!inString) { inString = true; stringChar = char; }
+      else if (stringChar === char) { inString = false; }
       continue;
     }
-
     if (inString) continue;
 
-    // Subquery parenthesis tracking
     if (char === "(") parenDepth++;
     if (char === ")") parenDepth = Math.max(0, parenDepth - 1);
 
-    // Only match keywords when at the root level (depth === 0)
-    if (parenDepth === 0) {
-      for (const kw of majorKeywords) {
-        const slice = cleanSql.substring(i, i + kw.length).toUpperCase();
-        if (slice === kw) {
-          // Verify word boundary before and after keyword
-          const prevChar = cleanSql[i - 1] || " ";
-          const nextChar = cleanSql[i + kw.length] || " ";
-
-          if (/\s/.test(prevChar) && /\s/.test(nextChar)) {
-            boundaries.push({ keyword: kw, start: i, end: i + kw.length });
-            i += kw.length - 1;
-            break;
+    if (!currentSelect) {
+      // We are not inside a SELECT block. Look for "SELECT" (with optional DISTINCT/ALL)
+      const rest = cleanSql.substring(i);
+      const match = rest.match(/^SELECT(\s+DISTINCT|\s+ALL)?\b/i);
+      
+      if (match) {
+        const prevChar = i === 0 ? " " : cleanSql[i - 1];
+        if (!isWordChar(prevChar)) {
+          // Found a valid SELECT block starting point
+          currentSelect = {
+            start: i + match[0].length,
+            depth: parenDepth // Record the depth so we only stop at the matching FROM
+          };
+          i += match[0].length - 1; // Skip past the SELECT keyword
+        }
+      }
+    } else {
+      // We are currently extracting a SELECT block. Stop only when we find FROM at the exact same depth!
+      const rest = cleanSql.substring(i);
+      const matchFrom = rest.match(/^FROM\b/i);
+      
+      if (matchFrom && parenDepth === currentSelect.depth) {
+        const prevChar = cleanSql[i - 1];
+        if (!isWordChar(prevChar)) {
+          // Found the matching FROM. Extract the content.
+          let content = cleanSql.substring(currentSelect.start, i).trim();
+          if (content.length > 0) {
+            selectBlocks.push(content);
           }
+          currentSelect = null; // Reset to start looking for the next SELECT
+          i += 3; // Skip past the FROM keyword
         }
       }
     }
   }
 
-  // Extract text slice for each clause
-  const result = {
-    select: "",
-    from: "",
-    where: "",
-    groupBy: "",
-    having: "",
-    orderBy: "",
-    limit: ""
-  };
-
-  const keyMap = {
-    "SELECT": "select",
-    "FROM": "from",
-    "WHERE": "where",
-    "GROUP BY": "groupBy",
-    "HAVING": "having",
-    "ORDER BY": "orderBy",
-    "LIMIT": "limit"
-  };
-
-  for (let b = 0; b < boundaries.length; b++) {
-    const current = boundaries[b];
-    const nextStart = (b + 1 < boundaries.length) ? boundaries[b + 1].start : cleanSql.length;
-    const clauseContent = cleanSql.substring(current.end, nextStart).trim();
-    const mappedKey = keyMap[current.keyword];
-    if (mappedKey) {
-      result[mappedKey] = clauseContent;
+  // Fallback: If the query ends abruptly without a FROM (e.g. `SELECT 1`)
+  if (currentSelect) {
+    let content = cleanSql.substring(currentSelect.start).trim();
+    if (content.length > 0) {
+      selectBlocks.push(content);
     }
   }
 
-  return result;
+  return {
+    selectArray: selectBlocks
+  };
 }
