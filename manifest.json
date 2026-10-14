@@ -1,0 +1,10 @@
+{
+  "manifest_version": 3,
+  "name": "SQL Query Splitter",
+  "version": "1.0",
+  "description": "Splits SQL queries into SELECT, FROM, WHERE, and other filter clauses.",
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "SQL Splitter"
+  }
+}

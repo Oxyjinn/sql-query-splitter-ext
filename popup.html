@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      width: 420px;
+      padding: 14px;
+      margin: 0;
+      background: #18191c;
+      color: #f1f1f1;
+    }
+    h3 {
+      margin: 0 0 10px 0;
+      font-size: 14px;
+      color: #3C66FB;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    label {
+      font-size: 11px;
+      text-transform: uppercase;
+      font-weight: 600;
+      color: #aaa;
+      display: block;
+      margin-top: 10px;
+    }
+    textarea {
+      width: 100%;
+      box-sizing: border-box;
+      margin-top: 4px;
+      padding: 8px;
+      font-size: 12px;
+      font-family: "Fira Code", monospace;
+      background: #2b2d32;
+      color: #fff;
+      border: 1px solid #40444b;
+      border-radius: 4px;
+      resize: vertical;
+    }
+    textarea:focus { outline: none; border-color: #3C66FB; }
+    .split-btn {
+      margin-top: 10px;
+      width: 100%;
+      padding: 8px;
+      background-color: #3C66FB;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-weight: 700;
+      font-size: 13px;
+    }
+    .split-btn:hover { background-color: #3154d4; }
+    .result-section {
+      margin-top: 12px;
+      padding-top: 10px;
+      border-top: 1px solid #333;
+    }
+    .clause-box {
+      margin-top: 8px;
+    }
+    .clause-label {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 11px;
+      font-weight: bold;
+      color: #7289da;
+    }
+    .copy-btn {
+      background: none;
+      border: none;
+      color: #aaa;
+      cursor: pointer;
+      font-size: 10px;
+      padding: 2px 4px;
+    }
+    .copy-btn:hover { color: #fff; }
+    .clause-output {
+      height: 48px;
+      background: #202225;
+    }
+  </style>
+</head>
+<body>
+  <h3>SQL Query Splitter</h3>
+  
+  <label for="sql-input">Paste SQL Query</label>
+  <textarea id="sql-input" rows="5" placeholder="SELECT u.id, u.name, o.total FROM users u LEFT JOIN orders o ON u.id = o.user_id WHERE u.status = 'ACTIVE' AND o.total > 100 GROUP BY u.id HAVING count(*) > 1"></textarea>
+
+  <button class="split-btn" id="split-btn">Split Query</button>
+
+  <div class="result-section" id="results" style="display: none;">
+    <div class="clause-box">
+      <div class="clause-label">
+        <span>SELECT</span>
+        <button class="copy-btn" data-target="out-select">Copy</button>
+      </div>
+      <textarea id="out-select" class="clause-output" readonly></textarea>
+    </div>
+
+    <div class="clause-box">
+      <div class="clause-label">
+        <span>FROM / JOINS</span>
+        <button class="copy-btn" data-target="out-from">Copy</button>
+      </div>
+      <textarea id="out-from" class="clause-output" readonly></textarea>
+    </div>
+
+    <div class="clause-box">
+      <div class="clause-label">
+        <span>FILTER (WHERE / HAVING)</span>
+        <button class="copy-btn" data-target="out-filter">Copy</button>
+      </div>
+      <textarea id="out-filter" class="clause-output" readonly></textarea>
+    </div>
+
+    <div class="clause-box">
+      <div class="clause-label">
+        <span>OTHER (GROUP BY / ORDER BY / LIMIT)</span>
+        <button class="copy-btn" data-target="out-other">Copy</button>
+      </div>
+      <textarea id="out-other" class="clause-output" readonly></textarea>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
